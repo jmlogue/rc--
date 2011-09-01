@@ -30,7 +30,7 @@ int main(int argc, char *argv[])
 	
 	// Original test case has totaldays = 22. Reduced to 1 to simplify validation.
 	// total days to run the simulation for:
-	int totaldays = 1;
+	int totaldays = 365;
 	
 	// ----------------- [start]--------------------
 	char reading[255];
@@ -679,9 +679,7 @@ int main(int argc, char *argv[])
 		int Crawl = 0;
 		int ERRCODE = 0;
 		int prevday = 0;
-		int RADcounter = 999;			// RAD: used for debugging
-
-
+		
 		double pref;
 		double sc;
 		double T;
@@ -858,6 +856,7 @@ int main(int argc, char *argv[])
 			
 			hrtot = hrtot + dt;				// Is number of minutes into simulation - used for beginning and end of cycle fan operation
 			ttime = int ((daymin - 1) / 60) + 1;      // Hours into day for thermostat schedule
+
 			if((int (day / 7) == day / 7.) || (int ((day - 1) / 7) == (day - 1) / 7.))
 				weekendflag = 1;
 			else
@@ -1454,7 +1453,6 @@ int main(int argc, char *argv[])
 			else
 				nonRivecVentSum = nonRivecVentSumOut;
 			
-
 			// RIVEC (only done evey ten minutes)
 			for(int i=0; i < Nfan; i++) {
 				// ---------------------FAN 31---------------------- DEFAULT RIVEC OPERATION BASED ON CONTROL ALGORITHM
@@ -2110,7 +2108,7 @@ int main(int argc, char *argv[])
 				heat(Tout, rhoref, Mceil, AL4, speed, ssolrad, nsolrad, told, ATTICVOL, housevol, sc, b, ERRCODE, TSKY,
 					FLOORAREA, pitch, location, MSUPREG, mretreg, mretleak, MSUPLEAK, MAH, supRval, retRval, supdiam,
 					retdiam, suparea, retarea, supthick, retthick, supvol, retvol, supcp, retcp, SUPVEL, retvel, suprho,
-					retrho, pref, w, diffuse, UA, matticenvin, matticenvout, mhousein, mhouseout, planarea, msupahoff,
+					retrho, pref, HROUT, diffuse, UA, matticenvin, matticenvout, mhousein, mhouseout, planarea, msupahoff,
 					mretahoff, solgain, windowS, windowN, windowWE, shadcoef, mfancyc, Hpeak, h, Whouse, retlength, suplength,
 					rooftype, M1, M12, M15, M16, rroof, rceil, ahflag, dtau, merv, mhrv, SBETA, CBETA, L, dec, Csol, idirect,
 					capacityc, capacityh, evapcap, intgain, bsize);
