@@ -162,7 +162,7 @@ void heat (
 	double& intgain,
 	int bsize
 ) {
-
+	
 	int RHOSHEATHING;
 	int RHOWOOD;
 	int RHOSHINGLES;
