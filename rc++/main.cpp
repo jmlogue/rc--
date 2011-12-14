@@ -8,8 +8,7 @@
 #include <direct.h>		//used for chdir command
 #include "functions.h"
 
-// RAD: system() is evil, example: remove system("pause")
-// RAD: do-while loop is orignally day < 22, it is currently at day < 2 for shorter analysis comparison
+// RAD: system("pause") command should eventually be removed, left for readability during code development
 
 using namespace std;
 
@@ -24,14 +23,20 @@ int main(int argc, char *argv[])
 	_chdir("input\\");
 	string batchfile_name = "v5batch.csv";
 	string shelterfile_name = "bshelter.dat";
-	string fanSchedulefile_name1 = "sched1";
-	string fanSchedulefile_name2 = "sched2";
-	string fanSchedulefile_name3 = "sched3";
+
+	// 'Set to a, b or c to avoid potential conflicts while running more than one simulation 
+	// at the same time using dynamic fan schedules
+	string SCHEDNUM = "c";
+	string fanSchedulefile_name1 = "sched1" + SCHEDNUM;
+	string fanSchedulefile_name2 = "sched2" + SCHEDNUM;
+	string fanSchedulefile_name3 = "sched3" + SCHEDNUM;
 	
-	// Original test case has totaldays = 22. Reduced to 1 to simplify validation.
 	// total days to run the simulation for:
-	int totaldays = 1;
+	int totaldays = 365;
 	
+
+	
+
 	// ----------------- [start]--------------------
 	char reading[255];
 	int Numsim;
@@ -95,6 +100,7 @@ int main(int argc, char *argv[])
 		double HR[5];		
 		double theat[24];
 		double tcool[24];
+		//double weatherFactor[13];			// FF - The weatherFactor is declared later, when reading input and not as an array variable
 		
 		// Zeroing the variables to create the sums for the .ou2 file
 		int hrtot = 0;
@@ -474,10 +480,16 @@ int main(int argc, char *argv[])
 		double afue = atof(reading);			// AFUE efficiency
 		
 		buildingfile.getline(reading, 255);
-		int bathroomSchedule = atoi(reading);			// Number of bathrooms (basically number of seaprate bathroom fans)
+		int bathroomSchedule = atoi(reading);	// Number of bathrooms (basically number of seaprate bathroom fans)
 		
 		buildingfile.getline(reading, 255);
 		int Nbedrooms = atoi(reading);			// Number of occupants (for 62.2 target ventilation calculation)
+
+		buildingfile.getline(reading, 255);
+		double Nstorey = atof(reading);			// Number of storeys in the building (for Nomalized Leakage calculation)
+
+		buildingfile.getline(reading, 255);
+		double weatherFactor = atof(reading);	// Number of storeys in the building (for Nomalized Leakage calculation)
 
 		buildingfile.close();
 
@@ -516,17 +528,42 @@ int main(int argc, char *argv[])
 		//------- Check if Dynamic Fan and Occupancy scheduling should be used ----------------------------------
 		int occupancyFlag = 0;
 		int dynamicScheduleFlag = 0;
+		int economizerUsed = 0;
+		double Qrivec = 0;
+		double Coriginal = 0;
+		double ELAeconomizer = 0;
+		double Ceconomizer = 0;
 
 		for(int i=0; i < Nfan; i++) {
+			if(fan[i].oper == 21 || fan[i].oper == 22)
+				economizerUsed = 1;		// Lets REGCAP know that an economizer is being used
 			if(fan[i].oper == 23 || fan[i].oper == 24 || fan[i].oper == 25 || fan[i].oper == 26 || fan[i].oper == 27)
 				dynamicScheduleFlag = 1;
-			if(fan[i].oper == 50)
+			if(fan[i].oper == 50 || fan[i].oper == 51 || fan[i].oper == 52 || fan[i].oper == 31) {
 				occupancyFlag = 1;		// Occupancy flag to determine if occupancy scheduling is used (0 = off, 1 = on)
+				Qrivec = -1 * fan[i].q	* 1000;
+			} else {
+				Qrivec = 1;
+			}
+		}
+
+		// Presure Relief for Economizer, increase envelope leakage C while economizer is operating
+		if(economizerUsed == 1) {
+			Coriginal = C;
+			if(cqah >= hqah) {			// Dependent on the largest of the heating/cooling AH fan power
+				// sized to 2Pa of pressure while economizer running
+				ELAeconomizer = cqah * (sqrt(rhoref / (2 * 2)) / 1);
+				Ceconomizer = 1 * ELAeconomizer * sqrt(2 / rhoref) * pow(4, (.5 - .65));
+			} else {
+				ELAeconomizer = hqah * (sqrt(rhoref / (2 * 2)) / 1);
+				Ceconomizer = 1 * ELAeconomizer * sqrt(2 / rhoref) * pow(4, (.5 - .65));
+			}
 		}
 
 		// ================ INITIALIZE SIMULATION VARIABLES =======================================
 		// Always use urban shelter from data file
-		row = "R"; // RAD :  this variable should be read from input file and not modified here, remove after debugging.
+
+		// row = "R";		// this variable should be read from input file and not modified here
 		
 		// Reading shelter values from a file.  Bshelter.dat contains shelter values
 		// Computed for the houses at AHHRF for every degree of wind angle
@@ -570,8 +607,12 @@ int main(int argc, char *argv[])
 			return 1; 
 		}
 
-		outputfile << "* Input file = " << f << " Weather file = " << weatherfile << endl;
-		outputfile << "Time,minutes,tout,tatt,thouse,tsup,tret,ahon,ahpower,hcap, compresspower, mechventpower, hr,qhouse,ach,ccap,SHR,Mcoil,setpoint,housepress,turnover, relexp, reldose, fan1, fan2, fan3, fan4, fan5, fan6, ventsum, rivecOn, nonRivecVentSum, achflue, occupied" << endl;
+		//outputfile << "* Input file = " << f << " Weather file = " << weatherfile << endl;
+		if(occupancyFlag ==1) {
+			outputfile << "Time,Min,Wspeed,Tout,Tatt,Thouse,Tsup,Tret,AHon,AHpower,Hcap, compressPower, mechventPower, HR,Qhouse,ACH,Ccap,SHR,Mcoil,setPoint,housePress,turnover, relExp, relDose, fan1, fan2, fan3, fan4, fan5, fan6, fan7, ventSum, rivecOn, nonRivecVentSum, ACHflue,  relExpReal, relDoseReal, occupied, occupiedExp, occupiedDose, C" << endl;
+		} else {
+			outputfile << "Time,Min,Wspeed,Tout,Tatt,Thouse,Tsup,Tret,AHon,AHpower,Hcap, compressPower, mechventPower, HR,Qhouse,ACH,Ccap,SHR,Mcoil,setPoint,housePress,turnover, relExp, relDose, fan1, fan2, fan3, fan4, fan5, fan6, fan7, ventSum, rivecOn, nonRivecVentSum, ACHflue,  relExpReal, relDoseReal, C" << endl;
+		}
 
 		// ================== OPEN WEATHER FILE FOR INPUT ========================================
 		_chdir("..\\input\\");
@@ -618,11 +659,44 @@ int main(int argc, char *argv[])
 
 		// Like the mass transport coefficient, the active mass for moisture scales with floor area
 		// The following are defined for RIVEC
-		double aeq = .001 * (.05 * FLOORAREA + 3.5 * (Nbedrooms + 1)) * 3600 / volume;			// 62.2 target ventilation rate (ACH)
-		double reldose = 1;						// Initial value for relative dose
+		// aeq = .001 * (.05 * FLOORAREA + 3.5 * (Nbedrooms + 1)) * 3600 / volume   ' 62.2 ventilation rate     
+		// aeq = .001 * (.05 * FLOORAREA + 3.5 * (Nbedrooms + 1) + (FLOORAREA / 100) * 10) * 3600 / volume ' 62.2 ventilation rate + infiltration credit (62.2, 4.1.3 p.4)s) using ACH of house
+		double aeq = 0;
+
+		double NL = 1000 * (C / FLOORAREA) * pow(Nstorey, .3);		// Normalized Leakage Calculation
+		double wInfil = weatherFactor * NL;							// Infiltration credit from ASHRAE 136 weather factor [ACH]
+
+
+		double defaultInfil = .001 * ((FLOORAREA / 100) * 10) * 3600 / volume;
+
+
+		// 62.2 ventilation rate + infiltration credit (w x NL)
+		// aeq = .001 * (.05 * FLOORAREA + 3.5 * (Nbedrooms + 1)) * (3600 / volume) + wInfil
+		// 62.2 ventilation rate + infiltration credit (62.2, 4.1.3 p.4)s) using ACH of house
+		aeq = .001 * (.05 * FLOORAREA + 3.5 * (Nbedrooms + 1) + (FLOORAREA / 100) * 10) * 3600 / volume;
+
+
+		double rivecX = (.05 * FLOORAREA + 3.5 * (Nbedrooms + 1)) / Qrivec;
+		double rivecY = ((FLOORAREA / 100) * 10)/Qrivec;
+		double expLimit = 1 + 4 * (1 - rivecX) / (1 + rivecY);
+
+		double relDose = 1;							// Initial value for relative dose
+		double relExp = 1;
 		double turnover = 1 / aeq;					// Initial value for turnover time (hrs)
-		double dtau = dt * 60;					// One minute timestep (in seconds)
+		double dtau = dt * 60;						// One minute timestep (in seconds)
 		double rivecdt = dtau / 3600;				// Rivec timestep is in hours, dtau is simulation timestep in seconds
+		double relDoseReal = 1;						// Initial value for relative dose using ACH of house
+		double relExpReal = 1;
+		double turnoverReal = 1 / aeq;				// Initial value for turnover time (hr)
+		double rivecMinutes = 0;
+
+		// for calculating the dose and exposure based on the hours of occupancy
+		double meanOccupiedDose = 0;
+		double meanOccupiedExp = 0;
+		double occupiedMinCount = 0;
+		double totalOccupiedExp = 0;
+		double totalOccupiedDose = 0;
+
 
 		// ======================= NEW FAN SCHEDULE INPUTS: WJNT ========================================
 		// Read in fan schedule (lists of 1s and 0s, 1 = fan ON, 0 = fan OFF, for every minute of the year)
@@ -679,9 +753,7 @@ int main(int argc, char *argv[])
 		int Crawl = 0;
 		int ERRCODE = 0;
 		int prevday = 0;
-		int RADcounter = 999;			// RAD: used for debugging
-
-
+		
 		double pref;
 		double sc;
 		double T;
@@ -695,8 +767,8 @@ int main(int argc, char *argv[])
 		double fanheat;
 		double ventsumin;
 		double ventsumout;
-		double turnoverold;
-		double reldoseold;
+		double turnoverOld;
+		double relDoseOld;
 		double nonRivecVentSumIn;
 		double nonRivecVentSumOut;
 		double nonRivecVentSum;
@@ -726,7 +798,7 @@ int main(int argc, char *argv[])
 		double fanpower;
 		double msupahoff=0;
 		double mretahoff=0;
-		double relexp=0;
+		// double relexp=0;
 		double evapcap = 0;
 		double latcap = 0;
 		double capacity = 0;
@@ -788,6 +860,10 @@ int main(int argc, char *argv[])
 		double ventsumoutD = 0;
 		double ventsuminD = 0;
 		double merv = 0;
+		double turnoverRealOld = 0;
+		double relDoseRealOld = 0;
+		double occupiedDose = 0;
+		double occupiedExp = 0;
 
 
 		do {
@@ -814,10 +890,30 @@ int main(int argc, char *argv[])
 			mhrv = 0;
 			fanheat = 0;
 			econoflag = 0;						// Setting economizer to "off"
+			
+			// Resets leakage in case economizer has operated previously (increased leakage for pressure relief)
+			if(economizerUsed == 1) {
+				C = Coriginal;
+				Cceil = C * (R + X) / 2;
+				AL4 = Cattic * sqrt(rhoref / 2) * pow(4, (Nattic - .5));
+
+				if(AL4 == 0)
+					AL4 = Cceil * sqrt(rhoref / 2) * pow(4, (Nattic - .5));
+
+				AL5 = C * sqrt(rhoref / 2) * pow(4, (n - .5));
+			}
+
 			ventsumin = 0;						// Setting sum of supply mechanical ventilation to zero
 			ventsumout = 0;						// Setting sum of exhaust mechanical ventilation to zero
-			turnoverold = turnover;
-			reldoseold = reldose;
+
+			// For RIVEC dose and exposure calculations
+			turnoverOld = turnover;
+			relDoseOld = relDose;
+
+			// Dose and Exposure calculations based on ACH of house rather than just mech vent
+			turnoverRealOld = turnoverReal;
+			relDoseRealOld = relDoseReal;
+
 			nonRivecVentSumIn = 0;				// Setting sum of non-RIVEC supply mechanical ventilation to zero
 			nonRivecVentSumOut = 0;				// Setting sum of non-RIVEC exhaust mechanical ventilation to zero
 			
@@ -829,10 +925,10 @@ int main(int argc, char *argv[])
 			if(dynamicScheduleFlag == 1) {
 				switch (bathroomSchedule) {
 				case 1:
-					fanschedulefile >> dryerFan >> kitchenFan >> bathOneFan;
+					fanschedulefile >> dryerFan >> kitchenFan >> bathOneFan >> bathTwoFan;
 					break;
 				case 2:
-					fanschedulefile >> dryerFan >> kitchenFan >> bathOneFan >> bathTwoFan;
+					fanschedulefile >> dryerFan >> kitchenFan >> bathOneFan >> bathTwoFan >> bathThreeFan;
 					break;
 				case 3:
 					fanschedulefile >> dryerFan >> kitchenFan >> bathOneFan >> bathTwoFan >> bathThreeFan;
@@ -858,6 +954,7 @@ int main(int argc, char *argv[])
 			
 			hrtot = hrtot + dt;				// Is number of minutes into simulation - used for beginning and end of cycle fan operation
 			ttime = int ((daymin - 1) / 60) + 1;      // Hours into day for thermostat schedule
+			
 			if((int (day / 7) == day / 7.) || (int ((day - 1) / 7) == (day - 1) / 7.))
 				weekendflag = 1;
 			else
@@ -893,7 +990,7 @@ int main(int argc, char *argv[])
 			
 			// Print to screen stage of simulation
 			
-			// FF: if you want to print a message every house use this code:
+			// FF: if you want to print a message every hour use this code:
 			//		cout << "Day = " << day << " HR = " << HOUR << endl;
 
 			// FF: if you want to print a message every day use this code:
@@ -1098,12 +1195,25 @@ int main(int argc, char *argv[])
 					comptime = 0;
 				}
 
-				econodt = (Tpredhouse - Tout) * 9.0 / 5.0;				// converting indoor-outdoor temp to F for economizer switching
+				// ====================== ECONOMIZER RATIONALE ==============================
+				econodt = Tpredhouse - Tout;			// 3.333K = 6F
 
-				if(ahflag == 0 && econodt >= 6 && Tpredhouse > 294.15)	// no cooling and 6F dt for economizer operation
+				// no cooling and 6F dt for economizer operation
+				if(ahflag == 0 && econodt >= 3.333 && Tpredhouse > 294.15 && economizerUsed == 1) {
 					econoflag = 1;
-				else
+					
+					// Pressure Relief					
+					C = Ceconomizer;
+					Cceil = C * (R + X) / 2;
+					AL4 = Cattic * sqrt(rhoref / 2) * pow(4, (Nattic - .5));
+					
+					if(AL4 == 0)
+						AL4 = Cceil * sqrt(rhoref / 2) * pow(4, (Nattic - .5));
+
+					AL5 = C * sqrt(rhoref / 2) * pow(4, (n - .5));
+				} else {
 					econoflag = 0;
+				}
 			}
 
 			ahflagprev = ahflag;
@@ -1334,8 +1444,6 @@ int main(int argc, char *argv[])
 
 			// =============================== FAN CONTROLS ==============================================
 
-			// *************************************** [RECHECK - START] **********************************************************>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
 			for(int i = 0; i < Nfan; i++) {
 				if(fan[i].oper == 1) {							// FAN ALWAYS ON
 					fan[i].on = 1;
@@ -1445,8 +1553,7 @@ int main(int argc, char *argv[])
 				} else if(fan[i].oper > 30)
 					dcv = 1;			
 			}
-			// *************************************** [RECHECK - END] **********************************************************>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
+			
 			// ***************  RIVEC ON/Off decision
 			// ***************  RIVEC calculations
 			if(nonRivecVentSumIn > nonRivecVentSumOut)						//ventsum based on largestof inflow or outflow
@@ -1464,36 +1571,36 @@ int main(int argc, char *argv[])
 						// start with controlled fan on as default					
 						if(hcflag == 1) {									// HEATING TIMES
 							if(HOUR >= 10 && HOUR < 22) {					// base time period
-								if(reldose <= 1 && relexp <= .8)
+								if(relDose <= 1 && relExp <= .8)
 									rivecOn = 0;
 								//IF nonRivecVentSum < aeq THEN rivecOn = 1 (removed from revised algorithm)
 							} else if(HOUR >= 22 || HOUR < 2) {				// pre-peak time period
-								if(reldose <= 1 && relexp <= 1)
+								if(relDose <= 1 && relExp <= 1)
 									rivecOn = 0;
 								if(nonRivecVentSum > 1.25 * aeq)
 									rivecOn = 0;
 							} else if(HOUR >= 2 && HOUR < 6) {				// peak time period
 									rivecOn = 0;							// always off
 							} else {                                        // post-peak time period
-								if(reldose <= 1 && relexp <= 1)
+								if(relDose <= 1 && relExp <= 1)
 									rivecOn = 0;
 								if(nonRivecVentSum > 1.25 * aeq)
 									rivecOn = 0;
 							}
 						} else {											// COOLING TIMES
 							if(HOUR >= 22 || HOUR < 10) {					// base time
-								if(reldose <= 1 && relexp <= .8)
+								if(relDose <= 1 && relExp <= .8)
 									rivecOn = 0;
 								//IF nonRivecVentSum < aeq THEN rivecOn = 1 (removed from revised algorithm)
 							} else if(HOUR >= 10 && HOUR < 14) { 			// prepeak
-								if(reldose <= 1 && relexp <= 1)
+								if(relDose <= 1 && relExp <= 1)
 									rivecOn = 0;
 								if(nonRivecVentSum > 1.25 * aeq)
 									rivecOn = 0;
 							} else if(HOUR >= 14 && HOUR < 18) {			// peak
 									rivecOn = 0;							// always off
 							} else {										// post peak
-								if(reldose <= 1 && relexp <= 1)
+								if(relDose <= 1 && relExp <= 1)
 									rivecOn = 0;
 								if(nonRivecVentSum > 1.25 * aeq)
 									rivecOn = 0;
@@ -1518,350 +1625,72 @@ int main(int argc, char *argv[])
 				//---------------------FAN 31 end----------------------
 
 
-
-				// FF: FAN 32, 33, 34, 35 commented due to dependency on tdv/td file
-				/*
-				//---------------------FAN 32---------------------- Uses an input file to determine the base/pre/post and peak time periods
-				if(dcv == 1 && fan[i].oper == 32) {
-					if(daymin == 1)
-						//INPUT #8, tdv 									//variable tdv is used for tdv 4hr data
-					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
-						rivecOn = 1; 										// this variable tells us if rivec is calling for the whole house fan to be turned off
-						// start with controlled fan on as default
-						if(HOUR >= (tdv - 4) && HOUR < tdv) {     			// prepeak
-							if(reldose <= 1 && relexp <= 1)
-								rivecOn = 0;
-							if(nonRivecVentSum > 1.25 * aeq)
-								rivecOn = 0;
-						} else if(HOUR >= tdv && HOUR < (tdv + 4)) { 		//peak
-							rivecOn = 0;   									//always off
-						} else if(HOUR >= (tdv + 4) && HOUR < (tdv + 8)) { 	// post peak
-							if(reldose <= 1 && relexp <= 1)
-								rivecOn = 0;
-							if(nonRivecVentSum > 1.25 * aeq)
-								rivecOn = 0;
-						} else {
-							if(reldose <= 1 && relexp <= .8)
-								rivecOn = 0;
-						}
-					}
-					//RIVEC decision after all other fans added up
-					if(rivecOn == 0) {  										//rivec has turned off this fan
-						fan[i].on = 0;
-					} else {  												//limited set of fans controllede by RIVEC only supply, exhaust and HRV are controlled
-						fan[i].on = 1;
-						mvpow = mvpow + fan[i].power;						// vent fan power
-						if(fan[i].q > 0) { 									// supply fan - its heat needs to be added to the internal gains of the house
-							fanheat = fan[i].power * .84;					// 16% efficiency for the particular fan used in this study.
-							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
-						} else {											// ex fan
-							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
-						}
-					}
-				}
-				//---------------------FAN 32 end-----------------------------
-				
-				//---------------------FAN 33 begin / TD ---------------------
-				if(dcv == 1 && fan[i].oper == 33) {
-					
-					if(hourmin == 1)
-					//	INPUT #9, td					
-					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
-						rivecOn = 1;								//start with controlled fan on as default
-						if(td == 1) {								//peak
-							rivecOn = 0;							//always off
-						} else {
-							if(reldose <= 1 && relexp <= 1)
-								rivecOn = 0;
-						}
-					}
-				
-					if(rivecOn == 0)								//rivec has turned off this fan
-						fan[i].on = 0;
-					else {
-						fan[i].on = 1;
-						mvpow = mvpow + fan[i].power;				//vent fan power
-						if(fan[i].q > 0) {							//supply fan - its heat needs to be added to the internal gains of the house
-							fanheat = fan[i].power * .84;			// 16% efficiency for the particular fan used in this study.
-							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
-						} else {									//ex fan
-							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
-						}
-					}
-				}
-				//---------------------FAN 33 end-----------------------------
-				
-				//---------------------FAN 34 begin / TD ---------------------
-				if(dcv == 1 && fan[i].oper == 34) {
-					if(hourmin == 1)
-						// INPUT #9, td
-					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
-						rivecOn = 1; //start with controlled fan on as default
-						if(td == 1) { //peak
-							rivecOn = 0;   //always off
-							if(hcflag == 1 && (Tpredhouse - Tout) < 5) {
-								rivecOn = 1;
-							} else if(hcflag == 2 && (Tpredhouse - Tout) > 0) {
-								rivecOn = 1;
-							}
-						} else {
-							if(reldose <= 1 && relexp <= 1)
-								rivecOn = 0;
-						}
-					}
-				
-					if(rivecOn == 0)		//rivec has turned off this fan
-						fan[i].on = 0;
-					else {
-						fan[i].on = 1;
-						mvpow = mvpow + fan[i].power;				//vent fan power
-						if(fan[i].q > 0) {							//supply fan - its heat needs to be added to the internal gains of the house
-							fanheat = fan[i].power * .84;			// 16% efficiency for the particular fan used in this study.
-							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
-						} else {									//ex fan
-							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
-						}
-					}
-				}
-				//---------------------FAN 34 end------------------------------
-				
-				//---------------------FAN 35 begin / TDe ---------------------
-				if(dcv == 1 && fan[i].oper == 35) {
-					if(hourmin == 1)
-						// INPUT #9, td
-					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
-						rivecOn = 1;           							//start with controlled fan on as default
-						if(td == 1) {          							//peak
-							rivecOn = 0;    							//always off
-							if(hcflag == 1 && (Tpredhouse - Tout) < 5) {
-								rivecOn = 1;
-							} else if(hcflag == 2 && (Tpredhouse - Tout) > 5) {
-								rivecOn = 1;
-							}
-						} else {
-							if(reldose <= 1 && relexp <= 1) {
-								rivecOn = 0;
-							}
-						}
-					}
-
-					if(rivecOn == 0)									//rivec has turned off this fan
-						fan[i].on = 0;
-					else {
-						fan[i].on = 1;
-						mvpow = mvpow + fan[i].power;    				// vent fan power
-						if(fan[i].q > 0) {            					// supply fan - its heat needs to be added to the internal gains of the house
-							fanheat = fan[i].power * .84;				// 16% efficiency for the particular fan used in this study.
-							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
-						} else { 										//ex fan
-							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
-						}
-					}
-				}
-				//---------------------FAN 35 end----------------------
-				*/
-
-				//---------------------FAN 36 rivec(4h - no shoulder periods)----------------------
-				if(dcv == 1 && fan[i].oper == 36) {
-					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
-						rivecOn = 1; 									// this variable tells us if rivec is calling for the whole house fan to be turned off
-						// start with controlled fan on as default
-					
-						if(hcflag == 1) {              					// heating times
-							if(HOUR >= 2 && HOUR < 6)					// peak
-								rivecOn = 0;            				// always off
-							else {                    			// post peak
-								if(reldose <= 1 && relexp <= 1)
-									rivecOn = 0;
-							}
-						} else {										// cooling times
-							if(HOUR >= 14 && HOUR < 18)					// peak
-								rivecOn = 0;                            // always off
-							else {                            			// post peak
-								if(reldose <= 1 && relexp <= 1)
-									rivecOn = 0;
-							}
-						}
-					}
-					//RIVEC decision after all other fans added up
-					//RIVEC MUST be the third fan
-					//i = 3
-					if(rivecOn == 0)	  								//rivec has turned off this fan
-						fan[i].on = 0;
-					else {  											//limited set of fans controllede by RIVEC only supply, exhaust and HRV are controlled
-						//IF fan(i).oper = 1 THEN   // fan always on
-						fan[i].on = 1;
-						mvpow = mvpow + fan[i].power;					// vent fan power
-						if(fan[i].q > 0) { 								// supply fan - its heat needs to be added to the internal gains of the house
-							fanheat = fan[i].power * .84;				// 16% efficiency for the particular fan used in this study.
-							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
-						} else {										// ex fan
-							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
-						}
-					//END IF
-					}
-				}
-				//---------------------FAN 36 end----------------------
-
-				//---------------------FAN 37 - RIVEC new heating hours----------------------
-				if(dcv == 1 && fan[i].oper == 37) {
-					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
-						rivecOn = 1;									// this variable tells us if rivec is calling for the whole house fan to be turned off
-						// start with controlled fan on as default
-
-						if(hcflag == 1) {								//heating times
-							if(HOUR >= 1 && HOUR < 5) {					// prepeak
-								if(reldose <= 1 && relexp <= 1)
-									rivecOn = 0;
-								if(nonRivecVentSum > 1.25 * aeq)
-									rivecOn = 0;
-							} else if( HOUR >= 5 && HOUR < 9) {			//peak
-								rivecOn = 0;							//always off
-							} else if( HOUR >= 9 && HOUR < 13) {		// post peak
-								if(reldose <= 1 && relexp <= 1)
-									rivecOn = 0;
-								if(nonRivecVentSum > 1.25 * aeq)
-									rivecOn = 0;
-							} else {
-								if(reldose <= 1 && relexp <= .8) {
-									rivecOn = 0;
-								}
-								//IF nonRivecVentSum < aeq THEN rivecOn = 1
-							}
-
-						} else {										//cooling times
-							if(HOUR >= 22 || HOUR < 10) {				// base time
-								if(reldose <= 1 && relexp <= .8)
-									rivecOn = 0;
-								//IF nonRivecVentSum < aeq THEN rivecOn = 1
-							} else if( HOUR >= 10 && HOUR < 14) {		// prepeak
-								if(reldose <= 1 && relexp <= 1)
-									rivecOn = 0;
-								if(nonRivecVentSum > 1.25 * aeq)
-									rivecOn = 0;
-							} else if( HOUR >= 14 && HOUR < 18) {		//peak
-								rivecOn = 0;							//always off
-							} else {									// post peak
-								if(reldose <= 1 && relexp <= 1)
-									rivecOn = 0;
-								if(nonRivecVentSum > 1.25 * aeq)
-									rivecOn = 0;
-							}
-						}
-					}
-					//RIVEC decision after all other fans added up
-					if(rivecOn == 0)									//rivec has turned off this fan
-						fan[i].on = 0;
-					else {												//limited set of fans controlled by RIVEC only supply, exhaust and HRV are controlled
-						//IF fan(i).oper = 1 THEN   // fan always on
-						fan[i].on = 1;
-						mvpow = mvpow + fan[i].power;					// vent fan power
-						if(fan[i].q > 0) {								// supply fan - its heat needs to be added to the internal gains of the house
-							fanheat = fan[i].power * .84;				// 16% efficiency for the particular fan used in this study.
-							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
-						} else { // ex fan
-							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
-						}
-						//END IF
-					}
-				}
-				//---------------------FAN 37 end----------------------
-
-				//---------------------FAN 40 - dcv by dose----------------------
-				if(dcv == 1 && fan[i].oper == 40) {
-					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
-						rivecOn = 1; 								//start with controlled fan on as default
-						if(reldose <= 1)
-							rivecOn = 0;
-					}
-
-					if(rivecOn == 0)  								//rivec has turned off this fan
-						fan[i].on = 0;
-					else {  										//limited set of fans controlled by RIVEC only supply, exhaust and HRV are controlled
-						fan[i].on = 1;
-						mvpow = mvpow + fan[i].power;				// vent fan power
-						if(fan[i].q > 0) { 							// supply fan - its heat needs to be added to the internal gains of the house
-							fanheat = fan[i].power * .84;			// 16% efficiency for the particular fan used in this study.
-							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
-						} else { 									// ex fan
-							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
-						}
-					}
-				}
-				//---------------------FAN 40 end----------------------
-
-				//---------------------FAN 41 - dcv by exposure----------------------
-				if(dcv == 1 && fan[i].oper == 41) {
-					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
-						rivecOn = 1; 								//start with controlled fan on as default
-						if(relexp <= 1)
-							rivecOn = 0;
-					}
-
-					if(rivecOn == 0)  								//rivec has turned off this fan
-						fan[i].on = 0;
-					else {  										//limited set of fans controlled by RIVEC only supply, exhaust and HRV are controlled
-						fan[i].on = 1;
-						mvpow = mvpow + fan[i].power;   	 		// vent fan power
-						if(fan[i].q > 0) {                    		// supply fan - its heat needs to be added to the internal gains of the house
-							fanheat = fan[i].power * .84;			// 16% efficiency for the particular fan used in this study.
-							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
-						} else { 									// ex fan
-							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
-						}
-					}
-				}
-				//---------------------FAN 41 end----------------------
-
 				//---------------------FAN 50---------- RIVEC OPERATION BASED ON CONTROL ALGORITHM v3 WJNT May 2011
 				if(dcv == 1 && fan[i].oper == 50) {
-					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
-						rivecOn = 1; 												// this variable tells us if rivec is calling for the whole house fan to be turned on
+					// if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41 || hourmin == 51) {
+					if(hourmin == 1 || hourmin == 16 || hourmin == 31 || hourmin == 46 || hourmin == 59) {
+
+						// rivecOn = 1 or 0. 1 = whole-house fan ON, 0 = whole-house fan OFF
+						// rivecOn = 1; 												// this variable tells us if rivec is calling for the whole house fan to be turned on
 						// start with controlled fan on (1) as default
 
 						if(hcflag == 1) {      										// HEATING TIMES
 							if((HOUR >= 0 && HOUR < 4) || (HOUR >= 12)) {        	// BASE Time Period
 								if(occupied[HOUR] == 1) {                        	// Occupied
-									if(reldose < 1 && relexp < .8)
-										rivecOn = 0;
-									if(nonRivecVentSum < aeq)
-										rivecOn = 1;
+									rivecOn = 1;									// Turn rivec fan ON
+									if(relDose < 1 && relExp < .8) {
+										if(nonRivecVentSum > aeq) {
+											rivecOn = 0;
+										}											
+									}									
 								} else if(occupied[HOUR] == 0) {                	// Unoccupied
-									if(reldose < 1 && relexp < 2)
-										rivecOn = 0;
-									if(reldose > 1.2 || relexp > 2)
+									if(relDose > 1.2 || relExp > expLimit)
 										rivecOn = 1;
-									if(nonRivecVentSum > aeq)
+									if(relDose < 1 && relExp < expLimit)
 										rivecOn = 0;
+									if(nonRivecVentSum > aeq)
+										rivecOn = 0;									
 								}
 							} else if(HOUR >= 4 && HOUR < 8) {						// PEAK Time Period
 								rivecOn = 0;										// Always off
 							} else if(HOUR >= 8 && HOUR < 12) {         			// RECOVERY Time Period
-								if(reldose < 1 && relexp < 1)
+								if(occupied[HOUR] == 0)
+									rivecOn = 0;
+								if(nonRivecVentSum < 1.25 * aeq) {
+									if(relExp > expLimit)
+										rivecOn = 1;
+								}
+								if(relExp < 1)
 									rivecOn = 0;
 								if(nonRivecVentSum > 1.25 * aeq)
 									rivecOn = 0;
 							}
-
 						} else {    												// COOLING TIMES
 							if(HOUR >= 22 || (HOUR >= 0 && HOUR < 14)) {           	// BASE Time Period
-								if(occupied[HOUR]) {                            	// Occupied
-									if(reldose < 1 && relexp < .8)
-										rivecOn = 0;
-									if(nonRivecVentSum < aeq)
+								if(occupied[HOUR] == 1) {                           // Occupied
+									rivecOn = 1;									// Turn rivec fan ON
+									if(relDose < 1 && relExp < .8) {
+										if(nonRivecVentSum > aeq)
+											rivecOn = 0;
+									}
+								} else if(occupied[HOUR] == 0) {	             	// Unoccupied
+									if(relDose > 1.2 || relExp > expLimit)
 										rivecOn = 1;
-								} else {                                           	// Unoccupied
-									if(reldose < 1 && relexp < 2)
+									if(relDose < 1 && relExp < expLimit)
 										rivecOn = 0;
-									if(reldose > 1.2 || relexp > 2)
-										rivecOn = 1;
 									if(nonRivecVentSum > aeq)
 										rivecOn = 0;
 								}
 							} else if(HOUR >= 14 && HOUR < 18) {                 	// PEAK Time Period
 								rivecOn = 0;                                		// Always off
 							} else if(HOUR >= 18 && HOUR < 22) {         			// RECOVERY Time Period
-								if(reldose < 1 && relexp < 1)
+								if(occupied[HOUR] == 0)
+									rivecOn = 0;
+								if(nonRivecVentSum < 1.25 * aeq) {
+									if(relDose > 1 || relExp > expLimit)
+										rivecOn = 1;
+								}
+								if(relExp < 1)
 									rivecOn = 0;
 								if(nonRivecVentSum > 1.25 * aeq)
 									rivecOn = 0;
@@ -1872,22 +1701,105 @@ int main(int argc, char *argv[])
 					if(rivecOn == 0)	  											// RIVEC has turned off this fan
 						fan[i].on = 0;
 					else {  														// limited set of fans controlled by RIVEC. Only supply, exhaust and HRV are controlled
+						rivecMinutes = rivecMinutes + 1;
 						fan[i].on = 1;
 						mvpow = mvpow + fan[i].power;								// vent fan power
 						if(fan[i].q > 0) { 											// supply fan - its heat needs to be added to the internal gains of the house
 							fanheat = fan[i].power * .84;							// 16% efficiency for the particular fan used in this study.
 							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
-						} else { 													// ex fan
+						} else { 													// exhaust fan
 							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
 						}
 					}
 				}
 				// ---------------------FAN 50 end----------------------
+
+				//---------------------FAN 51---------- RIVEC OPERATION BASED ON CONTROL ALGORITHM v3 WJNT May 2011
+				if(dcv == 1 && fan[i].oper == 51) {
+					if(hourmin == 1 || hourmin == 11 || hourmin == 21 || hourmin == 31 || hourmin == 41|| hourmin == 51) {
+						if(hcflag == 1) {      										// HEATING TIMES
+							if((HOUR >= 0 && HOUR < 4) || (HOUR >= 12)) {        	// BASE Time Period
+								if(occupied[HOUR] == 1) {                        	// Occupied
+									rivecOn = 1;									// Turn rivec fan ON
+									if(relDose < 1 && relExp < .8) {
+										if(nonRivecVentSum > aeq) {
+											rivecOn = 0;
+										}											
+									}									
+								} else if(occupied[HOUR] == 0) {                	// Unoccupied
+									if(relDose > 1.2 || relExp > 2)
+										rivecOn = 1;
+									if(relDose < 1 && relExp < 2)
+										rivecOn = 0;
+									if(nonRivecVentSum > aeq)
+										rivecOn = 0;									
+								}
+							} else if(HOUR >= 4 && HOUR < 8) {						// PEAK Time Period
+								rivecOn = 0;										// Always off
+							} else if(HOUR >= 8 && HOUR < 12) {         			// RECOVERY Time Period
+								if(nonRivecVentSum < 1.25 * aeq) {
+									if(relDose > 1 || relExp > 1)
+										rivecOn = 1;
+								}
+								if(relDose < 1 && relExp < 1)
+									rivecOn = 0;
+								if(nonRivecVentSum > 1.25 * aeq)
+									rivecOn = 0;
+							}
+						} else {    												// COOLING TIMES
+							if(HOUR >= 22 || (HOUR >= 0 && HOUR < 14)) {           	// BASE Time Period
+								if(occupied[HOUR] == 1) {                           // Occupied
+									rivecOn = 1;									// Turn rivec fan ON
+									if(relDose < 1 && relExp < .8) {
+										if(nonRivecVentSum > aeq)
+											rivecOn = 0;
+									}
+								} else if(occupied[HOUR] == 0) {					// Unoccupied
+									if(relDose > 1.2 || relExp > 2)
+										rivecOn = 1;
+									if(relDose < 1 && relExp < 2)
+										rivecOn = 0;
+									if(nonRivecVentSum > aeq)
+										rivecOn = 0;
+								}
+							} else if(HOUR >= 14 && HOUR < 18) {                 	// PEAK Time Period
+								rivecOn = 0;                                		// Always off
+							} else if(HOUR >= 18 && HOUR < 22) {         			// RECOVERY Time Period
+								if(nonRivecVentSum < 1.25 * aeq) {
+									if(relDose > 1 || relExp > 1)
+										rivecOn = 1;
+								}
+								if(relDose < 1 && relExp < 1)
+									rivecOn = 0;
+								if(nonRivecVentSum > 1.25 * aeq)
+									rivecOn = 0;
+							}
+						}
+					}
+					// RIVEC decision after all other fans added up
+					if(rivecOn == 0)	  											// RIVEC has turned off this fan
+						fan[i].on = 0;
+					else {  														// limited set of fans controlled by RIVEC. Only supply, exhaust and HRV are controlled
+						rivecMinutes = rivecMinutes + 1;
+						fan[i].on = 1;
+						mvpow = mvpow + fan[i].power;								// vent fan power
+						if(fan[i].q > 0) { 											// supply fan - its heat needs to be added to the internal gains of the house
+							fanheat = fan[i].power * .84;							// 16% efficiency for the particular fan used in this study.
+							ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
+						} else { 													// exhaust fan
+							ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
+						}
+					}
+				}
+				// ---------------------FAN 51 end----------------------
+
+
 			} // this is end of FOR loop for RIVEC fans statements
 
 			for(int i=0; i < Nfan; i++) {
 				// ************************** HRV code for HRV synched to air handler
 				if(fan[i].oper == 16) {												// HRV+Air Handler
+					//if(hourmin < 31) {											// on for first 30 minutes of hour
 					if(rivecOn == 1) {												// rivec controller allows HRV operation
 						ventsumin = ventsumin + abs(fan[i].q) * 3600 / volume;
 						ventsumout = ventsumout + abs(fan[i].q) * 3600 / volume;
@@ -1918,6 +1830,44 @@ int main(int argc, char *argv[])
 							mhrv = fan[i].q * rhoin;
 							mretreg = QretREG * rhoin - mhrv;
 						}
+					} else {
+						fan[i].on = 0;
+						mhrv = 0;
+					}
+				}
+
+				if(fan[i].oper == 17) {												// ERV+Air Handler Copied over from ARTI code
+					if(hourmin < 22) {												// on for first 22 minutes of hour
+						fan[i].on = 1;
+						mvpow = mvpow + fan[i].power;
+						if(ahflag != 1 && ahflag != 2 && ahflag != 102) {			// ah is off for heat/cool so turn it on for venting
+							ahflag = 100;
+							ahminutes = ahminutes + 1;
+							qah = cqah;
+							SUPVELah = qah / (pow(supdiam,2) * pi / 4);
+							retvelah = qah / (pow(retdiam,2) * pi / 4);
+							QsupREG = -qah * supLF + qah;
+							QretREG = qah * retLF - qah;
+							qretleak = -qah * retLF;
+							qsupleak = qah * supLF;
+							MSUPLEAK = qsupleak * rhoin;
+							mretleak = qretleak * rhoin;
+							
+							//*** HRV air is from outside so not simply added to qretleak or mretleak
+							//*** but needs to be subtracted from mretreg1
+							MAH = qah * rhoin;
+							merv = fan[i].q * rhoin;
+							MSUPREG = QsupREG * rhoin;
+							mretreg = QretREG * rhoin - merv;
+							mvpow = mvpow + cfanpower;								// note ah operates at cooling speed
+							fanpower = cfanpower * .85;								// for heat
+						} else {													// open the outside air vent
+							merv = fan[i].q * rhoin;
+							mretreg = QretREG * rhoin - merv;
+						}
+					} else {
+						fan[i].on = 0;
+						merv = 0;
 					}
 				}
 			}
@@ -2110,7 +2060,7 @@ int main(int argc, char *argv[])
 				heat(Tout, rhoref, Mceil, AL4, speed, ssolrad, nsolrad, told, ATTICVOL, housevol, sc, b, ERRCODE, TSKY,
 					FLOORAREA, pitch, location, MSUPREG, mretreg, mretleak, MSUPLEAK, MAH, supRval, retRval, supdiam,
 					retdiam, suparea, retarea, supthick, retthick, supvol, retvol, supcp, retcp, SUPVEL, retvel, suprho,
-					retrho, pref, w, diffuse, UA, matticenvin, matticenvout, mhousein, mhouseout, planarea, msupahoff,
+					retrho, pref, HROUT, diffuse, UA, matticenvin, matticenvout, mhousein, mhouseout, planarea, msupahoff,
 					mretahoff, solgain, windowS, windowN, windowWE, shadcoef, mfancyc, Hpeak, h, Whouse, retlength, suplength,
 					rooftype, M1, M12, M15, M16, rroof, rceil, ahflag, dtau, merv, mhrv, SBETA, CBETA, L, dec, Csol, idirect,
 					capacityc, capacityh, evapcap, intgain, bsize);
@@ -2178,61 +2128,98 @@ int main(int argc, char *argv[])
 			told[15] = Tpredhouse;
 
 
-		
+
 			// ************** house ventilation rate  - what would be measured with a tracer gas i.e., not just envelope and vent fan flows
 			// min has msupreg added in mass balance calculations and mretleak contributes to house ventilation rate
 			mhouse = min - mretleak * (1 - supLF) - MSUPREG;
 			mhouse = mhouse - mfancyc - merv - mhrv;
 			qhouse = abs(mhouse / rhoin); // m^3/s
 			achhouse = qhouse / housevol * 3600; //ach
-		
+
 			if(Mflue < 0)
 				achflue = (Mflue / rhoin) / housevol * 3600; //ach
 			else
 				achflue = (Mflue / rhoout) / housevol * 3600; //ach
-		
+
 			// ****** IAQ calculations **************************************************************************************************************************************************
 			if(ventsumin > ventsumout) //ventsum based on largest of inflow or outflow
 				ventsum = ventsumin;
 			else
 				ventsum = ventsumout;
-			
-			// -------dkm: To add flue in redose/relexp calc the following two IF sentences have been added------
+
+			// -------dkm: To add flue in redose/relExp calc the following two IF sentences have been added------
 			if(achflue <= 0)
 				ventsumoutD = ventsumout + abs(achflue);
 			else
 				ventsuminD = ventsumin + achflue;
-			
+
 			if(ventsuminD > ventsumoutD)	//ventsum based on largest of inflow or outflow
 				ventsumD = ventsuminD;
 			else
 				ventsumD = ventsumoutD;
-		
+
 			if(ventsumD <= 0)
 				ventsumD = .000001;
-			
-			turnover = (1 - exp(-ventsumD * rivecdt)) / ventsumD + turnoverold * exp(-ventsumD * rivecdt);
-			relexp = aeq * turnover;
-			reldose = aeq * turnover * (1 - exp(-rivecdt / 24)) + reldoseold * exp(-rivecdt / 24);
-		
+
+			// turnover = (1 - exp(-ventsumD * rivecdt)) / ventsumD + turnoverOld * exp(-ventsumD * rivecdt);
+			// turnover = (1 - exp(-(ventsumD + wInfil) * rivecdt)) / (ventsumD + wInfil) + turnoverOld * exp(-(ventsumD + wInfil) * rivecdt);		// Including W Factor infiltration baseline
+			// turnover = (1 - exp(-(ventsum + wInfil) * rivecdt)) / (ventsum + wInfil) + turnoverOld * exp(-(ventsum + wInfil) * rivecdt);			// Including W Factor infiltration baseline (No flue so using ventsum)
+			// Including W Factor infiltration baseline (No flue so using ventsum)
+			turnover = (1 - exp(-(ventsum + defaultInfil) * rivecdt)) / (ventsum + defaultInfil) + turnoverOld * exp(-(ventsum + defaultInfil) * rivecdt);
+
+			relExp = aeq * turnover;
+			relExpReal = aeq * turnoverReal;
+
+			if(occupancyFlag == 1) {
+				if(occupied[HOUR] == 0) {
+					relDose = 1 * (1 - exp(-rivecdt / 24)) + relDoseOld * exp(-rivecdt / 24);
+					relDoseReal = 1 * (1 - exp(-rivecdt / 24)) + relDoseRealOld * exp(-rivecdt / 24);
+				} else {
+					relDose = relExp * (1 - exp(-rivecdt / 24)) + relDoseOld * exp(-rivecdt / 24);
+					relDoseReal = relExp * (1 - exp(-rivecdt / 24)) + relDoseRealOld * exp(-rivecdt / 24);
+				}
+			} else {
+				relDose = relExp * (1 - exp(-rivecdt / 24)) + relDoseOld * exp(-rivecdt / 24);
+			}
+
+			turnoverReal = (1 - exp(-(achhouse) * rivecdt)) / (achhouse) + turnoverRealOld * exp(-(achhouse) * rivecdt);
+
+			if(occupancyFlag == 1) {
+				occupiedDose = relDose * occupied[HOUR]; // dose and exposure for when the building is occupied
+				occupiedExp = relExp * occupied[HOUR];
+
+				if(occupied[HOUR] == 1) {
+					occupiedMinCount = occupiedMinCount + 1; // counts number of minutes while house is occupied
+				}
+				totalOccupiedDose = totalOccupiedDose + occupiedDose;    // total dose and exp over the occupied time period
+				totalOccupiedExp = totalOccupiedExp + occupiedExp;
+			}
 			// ****** end IAQ calculations **************************************************************************************************************************************************
-			
+
 			// Writing results to a csv file
 			double setpoint;
-		
+
 			if(hcflag == 1)
 				setpoint = theat[ttime-1];
 			else
 				setpoint = tcool[ttime-1];
 
-			outputfile << HOUR << ", " << hrtot << ", " << Tout << ", " << tpredattic << ", " << Tpredhouse << ", ";
-			outputfile << tpredsup << ", " << tpredret << ", " << ahflag << ", " << fanpow << ", " << hcap << ", ";
-			outputfile << powercomp << ", " << mvpow << ", " << HR[3] * 1000 << ", " << qhouse << ", " << achhouse << ", ";
-			outputfile << capacityc << ", " << SHR << ", " << Mcoil << ", " << setpoint << ", " << Pint << ", ";
-			outputfile << turnover << ", " << relexp << ", " << reldose << ", " << fan[0].on << ", " << fan[1].on << ", ";
-			outputfile << fan[2].on << ", " << fan[3].on << ", " << fan[4].on << ", " << fan[5].on << ", " << ventsum << ", ";
-			outputfile << rivecOn << ", " << nonRivecVentSum << ", " << achflue << ", " << occupied[HOUR] << endl;
-		
+
+			outputfile << HOUR << ", " << hrtot << ", " << speed << ", " << Tout << ", " << tpredattic << ", ";
+			outputfile << Tpredhouse << ", " << tpredsup << ", " << tpredret << ", " << ahflag << ", " << fanpow << ", ";
+			outputfile << hcap << ", " << powercomp << ", " << mvpow << ", " << HR[3] * 1000 << ", " << qhouse << ", ";
+			outputfile << achhouse << ", " << capacityc << ", " << SHR << ", " << Mcoil << ", " << setpoint << ", ";
+			outputfile << Pint << ", " << turnover << ", " << relExp << ", " << relDose << ", " << fan[0].on << ", ";
+			outputfile << fan[1].on << ", " << fan[2].on << ", " << fan[3].on << ", " << fan[4].on << ", " << fan[5].on << ", ";
+			outputfile << fan[6].on << ", " << ventsum << ", " << rivecOn << ", " << nonRivecVentSum << ", " << achflue << ", ";
+			outputfile << relExpReal << ", " << relDoseReal << ", ";
+
+			if(occupancyFlag == 1)
+				outputfile << occupied[HOUR] << ", " << occupiedExp << ", " << occupiedDose << ", " << C << endl;
+			else
+				outputfile << C << endl;
+			
+				
 			//****** WRITING MOISTURE DATA FILE ******
 			moisturefile << HR[0] << ", " << HR[1] << ", " << HR[2] << ", " << HR[3] << ", " << HR[4] << endl;
 			
@@ -2289,21 +2276,51 @@ int main(int argc, char *argv[])
 		thouseavg = thouseavg / numt;
 		achavg = achavg / numt;
 
+		if(occupancyFlag == 1) {
+			meanOccupiedDose = totalOccupiedDose / occupiedMinCount;
+			meanOccupiedExp = totalOccupiedExp / occupiedMinCount;
+		}
+
+		// log file
 		_chdir("..\\output\\");
+		ofstream logfile(Outfile + ".log"); 
+		if(!logfile) { 
+			cout << "Cannot open: " << Outfile + ".log" << endl;
+			system("pause");
+			return 1; 
+		}
+
+		logfile << "* Input file = " << f << " Weather file = " << weatherfile << endl;
+		logfile << "Headers" << endl;
+		logfile << "Time,minutes,wspeed,tout,tatt,thouse,tsup,tret,ahon,ahpower,hcap,compresspower,";
+		logfile << "mechventpower,hr,qhouse,ach,ccap,SHR,Mcoil,setpoint,housepress,turnover,relExp,";
+		logfile << "relDose,fan1,fan2,fan3,fan4,fan5,fan6,ventsum,rivecOn,nonRivecVentSum,achflue,relExpReal,relDoseReal,";
+
+		if(occupancyFlag == 1)
+			logfile << "occupied,occupiedExp,occupiedDose,C" << endl;
+		else
+			logfile << "C" << endl;
+
+		logfile << "Number of days = " << day - 1 << endl;
+		logfile << "Start time = " << ts;
+		logfile << "End time = " << te << endl;
+
+		logfile.close();
+
+		// ou2 file
 		ofstream ou2file(Outfile + ".ou2"); 
 		if(!ou2file) { 
 			cout << "Cannot open: " << Outfile + ".ou2" << endl;
 			system("pause");
 			return 1; 
 		}
-		
-		ou2file << "* Input file = " << f << " Weather file = " << weatherfile << endl;
-		ou2file << "Tout, Tattpred, Thousepred, AHkWh, therms, compkWh, ventkWh, avgach" << endl;
+
+		ou2file << "Tout, Tattpred, Thousepred, AHkWh, therms, compkWh, ventkWh, avgach, meanOccupiedExp,";
+		ou2file << "meanOccupiedDose, occupiedMinCount, aeq, rivecMinutes, NL" << endl;
 		ou2file << toutavg << ", " << tatticavg << ", " << thouseavg << ", " << faneleckWh << ", ";
-		ou2file << gastherm << ", " << compeleckWh << ", " << mveleckWh << ", " << achavg << endl;
-		ou2file << "Number of days = " << day - 1 << endl;
-		ou2file << "Start time = " << ts;
-		ou2file << "End time = " << te << endl;
+		ou2file << gastherm << ", " << compeleckWh << ", " << mveleckWh << ", " << achavg << ", ";
+		ou2file << meanOccupiedExp << ", " << meanOccupiedDose << ", " << occupiedMinCount << ", ";
+		ou2file << aeq << ", " << rivecMinutes << ", " << NL << endl;
 
 		ou2file.close();
 

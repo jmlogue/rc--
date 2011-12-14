@@ -162,9 +162,7 @@ void heat (
 	double& intgain,
 	int bsize
 ) {
-
-	double w = 0;		//FF: This variable will be eliminated after debug and will use HROUT instead.
-
+	
 	int RHOSHEATHING;
 	int RHOWOOD;
 	int RHOSHINGLES;
@@ -290,7 +288,7 @@ void heat (
 		pws = exp(c1 / Tout + c2 + c3 * Tout + c4 * Tout * Tout + c5 * pow(Tout, 3) + c6 * pow(Tout, 4) + c7 * log(Tout));
 	}
 
-	PW = HROUT * pref / (.62198 + w);
+	PW = HROUT * pref / (.62198 + HROUT);						// water vapor partial pressure pg 1.9 ASHRAE fundamentals 2009
 	PW = PW / 1000 / 3.38;										// CONVERT TO INCHES OF HG
 	TSKY = Tout * pow((.55 + .33 * sqrt(PW)), .25);				// TSKY DEPENDS ON PW
 
@@ -1202,7 +1200,7 @@ void houseleak (
 		double dtheta = 11.3;
 		int nofirst = 0;
 
-		double P = 0;								// FF: This should be 0.17 and not 0, fix after debug!!
+		double P = 0.17;							// P is the power law exponent of the wind speed profile at the building site (see LBNL 42361 Walker & Wilson 1998 p.15)
 		double Cpwallvar = 0;						// This variable replaces the non-array Cpwall var
 		double CPvar = 0;							// This variable replaces the non-array CP var
 		double Bovar = 0;							// This variable is to replace Bo[-1] and to account for Bo(0) in BASIC version
@@ -1297,7 +1295,7 @@ void houseleak (
 
 		if(flag < 1) {
 			Pint = 0;						// a reasonable first guess
-			dPint = 25;
+			dPint = 200;
 		} else {
 			dPint = .25;
 		}
@@ -1817,14 +1815,9 @@ void Flueflow(double& Tin, double& Swrfl, double& dPwind, double& dPtemp, double
 void Floorflow3(double& Cfloor, double& Cpfloor, double& dPwind, double& Pint, double& C,
 	double& n, double& Mfloor, double& rhoo, double& rhoi, double& dPfloor, double& Hfloor, double& dPtemp) {
 
-		double temp_dPtemp = dPtemp; // RAD FF: Remove when validated. This is just for validation, proper fix was passing dPtemp from houseleak as a parameter!!!!
-		dPtemp = 0; // RAD FF: Remove when validated. This is just for validation, proper fix was passing dPtemp from houseleak as a parameter!!!!
-		
 		// calculates flow through floor level leaks
 		dPfloor = Pint + Cpfloor * dPwind - Hfloor * dPtemp;
 
-		dPtemp = temp_dPtemp; // RAD FF: Remove when validated. This is just for validation, proper fix was passing dPtemp from houseleak as a parameter!!!!
-		
 		if(dPfloor >= 0)
 			Mfloor = rhoo * Cfloor * pow(dPfloor,n);
 		else
